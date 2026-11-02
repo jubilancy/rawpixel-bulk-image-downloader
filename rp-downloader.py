@@ -31,7 +31,7 @@ load_dotenv(ROOT / ".env")
 SESSION_COOKIE = os.getenv("RAWPIXEL_SESSION_COOKIE", "")
 
 CSV_FIELDS = ["imageId", "title", "artist", "license", "description",
-              "tags", "date", "image_url", "url", "source_url"]
+              "tags", "date", "preview_url", "download_url", "url", "source_url"]
 IMAGE_ID_RE = re.compile(r"/image/(\d+)")
 
 
@@ -209,10 +209,34 @@ def fetch_record(page: Page, image_url: str, source_url: str) -> dict:
     try:
         og = page.locator('meta[property="og:image"]').first
         if og.count() > 0:
-            record["image_url"] = og.get_attribute("content") or ""
+            record["preview_url"] = og.get_attribute("content") or ""
     except Exception:
         pass
+    record["download_url"] = get_download_url(page)
     return record
+
+
+def get_download_url(page: Page) -> str:
+    """Click the page's Download button, capture the file URL the browser is
+    sent to, then cancel so nothing is saved."""
+    button = page.locator('button:has-text("Download")').first
+    if button.count() == 0:
+        button = page.locator('a[href*="download"]').first
+    if button.count() == 0:
+        button = page.locator('[class*="download"]').first
+    if button.count() == 0:
+        print("      ⚠️  No download button found")
+        return ""
+    try:
+        with page.expect_download(timeout=30000) as dl_info:
+            button.click()
+        download = dl_info.value
+        url = download.url
+        download.cancel()
+        return url
+    except Exception as e:
+        print(f"      ⚠️  Could not get download URL: {e}")
+        return ""
 
 
 def existing_ids(path: Path) -> set[str]:
@@ -253,8 +277,11 @@ def main() -> int:
             writer.writeheader()
 
         browser = pw.chromium.launch(headless=args.headless)
-        context = browser.new_context()
-        if SESSION_COOKIE:  # optional
+        context = browser.new_context(accept_downloads=True)
+        if not SESSION_COOKIE:
+            print("⚠️  No session cookie: full-resolution download URLs need a login "
+                  "(run: uv run setup-cookie.py)\n")
+        else:
             name, _, value = SESSION_COOKIE.partition("=")
             context.add_cookies([{"name": name, "value": value,
                                   "domain": ".rawpixel.com", "path": "/"}])

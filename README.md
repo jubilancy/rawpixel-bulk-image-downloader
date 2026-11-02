@@ -7,6 +7,7 @@ Collects image metadata from Rawpixel into a single CSV using browser automation
 - Reads many URLs from `urls.txt` in one run
 - Handles search pages, boards/collections and single image links
 - Scrolls listing pages to the bottom (lazy-loaded / infinite scroll) and follows `rel="next"` pagination if present
+- Captures the full-resolution download link for each image without saving the file
 - One CSV row per image; re-runs append and skip image IDs already in the CSV
 
 ## Setup
@@ -23,7 +24,7 @@ uv run --with playwright playwright install chromium
 cp urls.txt.example urls.txt
 ```
 
-3. Optional: log in and save your session cookie to `.env`, if listings need a login:
+3. Log in and save your session cookie to `.env` (needed for `download_url`):
 
 ```bash
 uv run setup-cookie.py
@@ -52,7 +53,8 @@ uv run rp-downloader.py
 | `description` | Description (max 500 chars) |
 | `tags` | Up to 10 keywords |
 | `date` | Date (if found) |
-| `image_url` | Preview image URL from the page's `og:image` tag |
+| `preview_url` | Preview image from the page's `og:image` tag (not the full-resolution file) |
+| `download_url` | Full-resolution file URL, captured by clicking the page's Download button and cancelling (nothing is saved). Needs a login cookie |
 | `url` | Rawpixel image page |
 | `source_url` | The URL from `urls.txt` it came from |
 
