@@ -3,6 +3,8 @@ data
 images
 .DS_Store
 .claude
+__pycache__
+urls.txt
 
 # Environment variables (contains sensitive session cookie)
 .env
