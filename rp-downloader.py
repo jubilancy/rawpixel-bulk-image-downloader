@@ -5,11 +5,11 @@
 #     "python-dotenv>=1.0",
 # ]
 # ///
-"""Bulk-download CC0 images from Rawpixel.
+"""Bulk-export Rawpixel image metadata to a CSV (no images are downloaded).
 
 Reads URLs from urls.txt (one per line, '#' for comments). Each URL may be a
 search page, board/collection, or single image link. Listing pages are scrolled
-to the bottom so lazy-loaded images are collected before downloading.
+to the bottom so lazy-loaded images are collected before metadata is read.
 
     uv run rp-downloader.py
     uv run rp-downloader.py --urls my-urls.txt --headless
@@ -30,15 +30,9 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 SESSION_COOKIE = os.getenv("RAWPIXEL_SESSION_COOKIE", "")
 
-CSV_FIELDS = ["filename", "imageId", "title", "artist", "license",
-              "description", "tags", "date", "url"]
+CSV_FIELDS = ["imageId", "title", "artist", "license", "description",
+              "tags", "date", "image_url", "url", "source_url"]
 IMAGE_ID_RE = re.compile(r"/image/(\d+)")
-
-
-def sanitize_filename(name: str) -> str:
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name)
-    name = re.sub(r"\s+", "_", name)
-    return name.rstrip(".")[:200]
 
 
 def read_urls(path: Path) -> list[str]:
@@ -204,73 +198,42 @@ def extract_metadata(page: Page, image_url: str, image_id: str) -> dict:
     return record
 
 
-def download_image(page: Page, image_url: str, out_dir: Path) -> dict | None:
+def fetch_record(page: Page, image_url: str, source_url: str) -> dict:
     m = IMAGE_ID_RE.search(image_url)
     image_id = m.group(1) if m else "unknown"
-
-    existing = list(out_dir.glob(f"{image_id}_*"))
-    if existing:
-        print(f"      ↷ Already downloaded: {existing[0].name}")
-        return None
-
     page.goto(image_url, wait_until="networkidle")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(1500)
     dismiss_cookie_consent(page)
-
-    body = (page.text_content("body") or "").lower()
-    if not any(k in body for k in ("cc0", "public domain", "u.s. government")):
-        print("      ⚠️  Not CC0 licensed, skipping")
-        return None
-
-    title = page.title()
-    print(f"      Title: {title}")
-    metadata = extract_metadata(page, image_url, image_id)
-
-    button = page.locator('button:has-text("Download")').first
-    if button.count() == 0:
-        button = page.locator('a[href*="download"]').first
-    if button.count() == 0:
-        button = page.locator('[class*="download"]').first
-    if button.count() == 0:
-        raise RuntimeError("could not find download button")
-
-    with page.expect_download(timeout=30000) as dl_info:
-        button.click()
-    download = dl_info.value
-    ext = Path(download.suggested_filename).suffix
-    filename = f"{image_id}_{sanitize_filename(title.split('|')[0].strip())}{ext}"
-    download.save_as(out_dir / filename)
-    print(f"      ✓ Downloaded: {filename}")
-    metadata["filename"] = filename
-    return metadata
+    record = extract_metadata(page, image_url, image_id)
+    record["source_url"] = source_url
+    try:
+        og = page.locator('meta[property="og:image"]').first
+        if og.count() > 0:
+            record["image_url"] = og.get_attribute("content") or ""
+    except Exception:
+        pass
+    return record
 
 
-def write_csv(out_dir: Path, records: list[dict]) -> None:
-    path = out_dir / "metadata.csv"
-    new_file = not path.exists()
-    with path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        if new_file:
-            writer.writeheader()
-        writer.writerows(records)
-    print(f"   📝 Metadata saved to: {path}")
+def existing_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    with path.open(newline="", encoding="utf-8") as f:
+        return {row["imageId"] for row in csv.DictReader(f) if row.get("imageId")}
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Bulk-download CC0 images from Rawpixel.")
+    ap = argparse.ArgumentParser(description="Export Rawpixel image metadata to CSV.")
     ap.add_argument("--urls", type=Path, default=ROOT / "urls.txt",
                     help="file with one Rawpixel URL per line (default: urls.txt)")
-    ap.add_argument("--out", type=Path, default=ROOT / "images",
-                    help="output directory (default: ./images)")
+    ap.add_argument("--out", type=Path, default=ROOT / "rawpixel.csv",
+                    help="output CSV (default: ./rawpixel.csv; appended to, existing IDs skipped)")
     ap.add_argument("--headless", action="store_true",
                     help="run the browser without a visible window")
     args = ap.parse_args()
 
-    print("=== Rawpixel CC0 Image Downloader ===\n")
+    print("=== Rawpixel Metadata Exporter ===\n")
 
-    if not SESSION_COOKIE:
-        print("❌ Session cookie not found. Run: uv run setup-cookie.py")
-        return 1
     if not args.urls.exists():
         print(f"❌ {args.urls} not found. Copy urls.txt.example to urls.txt and add URLs.")
         return 1
@@ -280,57 +243,61 @@ def main() -> int:
         return 1
     print(f"Loaded {len(urls)} URL(s) from {args.urls}\n")
 
-    name, _, value = SESSION_COOKIE.partition("=")
-    ok = failed = 0
-    single_links: list[str] = []
+    seen = existing_ids(args.out)
+    new_file = not args.out.exists()
+    ok = failed = skipped = 0
 
-    with sync_playwright() as pw:
+    with sync_playwright() as pw, args.out.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+        if new_file:
+            writer.writeheader()
+
         browser = pw.chromium.launch(headless=args.headless)
-        context = browser.new_context(accept_downloads=True)
-        context.add_cookies([{"name": name, "value": value,
-                              "domain": ".rawpixel.com", "path": "/"}])
+        context = browser.new_context()
+        if SESSION_COOKIE:  # optional
+            name, _, value = SESSION_COOKIE.partition("=")
+            context.add_cookies([{"name": name, "value": value,
+                                  "domain": ".rawpixel.com", "path": "/"}])
         page = context.new_page()
 
-        # Resolve every URL into (output dir name, [image links])
-        groups: dict[str, list[str]] = {}
+        # Resolve every URL into image link -> source URL
+        items: dict[str, str] = {}
         for url in urls:
             print(f"\n🔗 {url}")
             try:
                 if is_single_image(url):
-                    single_links.append(normalize_image_url(url))
+                    items.setdefault(normalize_image_url(url), url)
                     continue
                 title, links = collect_listing(page, url)
                 print(f"✅ {title}: {len(links)} images\n")
-                groups.setdefault(sanitize_filename(title), []).extend(links)
+                for link in links:
+                    items.setdefault(link, url)
             except Exception as e:
                 print(f"❌ Could not load listing: {e}")
                 failed += 1
-        if single_links:
-            groups.setdefault("single-images", []).extend(single_links)
 
-        for folder, links in groups.items():
-            links = list(dict.fromkeys(links))
-            out_dir = args.out / folder
-            out_dir.mkdir(parents=True, exist_ok=True)
-            print(f"\n📁 {out_dir} ({len(links)} images)")
-            records: list[dict] = []
-            for i, link in enumerate(links, 1):
-                print(f"\n📥 [{i}/{len(links)}] {link}")
-                try:
-                    rec = download_image(page, link, out_dir)
-                    if rec:
-                        records.append(rec)
-                        ok += 1
-                except Exception as e:
-                    print(f"      ❌ {e}")
-                    failed += 1
-                time.sleep(2)
-            if records:
-                write_csv(out_dir, records)
+        print(f"\n📋 {len(items)} unique image(s) to read")
+        for i, (link, source) in enumerate(items.items(), 1):
+            m = IMAGE_ID_RE.search(link)
+            if m and m.group(1) in seen:
+                skipped += 1
+                continue
+            print(f"[{i}/{len(items)}] {link}")
+            try:
+                writer.writerow(fetch_record(page, link, source))
+                fh.flush()
+                if m:
+                    seen.add(m.group(1))
+                ok += 1
+            except Exception as e:
+                print(f"      ❌ {e}")
+                failed += 1
+            time.sleep(1)
 
         browser.close()
 
-    print(f"\n✅ Complete: {ok} downloaded, {failed} failed")
+    print(f"\n✅ Done: {ok} rows written, {skipped} already in CSV, {failed} failed")
+    print(f"📝 {args.out}")
     return 0
 
 
