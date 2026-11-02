@@ -1,148 +1,68 @@
-# Rawpixel bulk image downloader
+# Rawpixel bulk metadata exporter
 
-Automated tool for downloading CC0 licenced images from Rawpixel using browser automation. Downloads high-resolution images and saves comprehensive metadata to CSV.
+Collects image metadata from Rawpixel into a single CSV using browser automation (Playwright). No images are downloaded. Single-file Python scripts with [PEP 723](https://peps.python.org/pep-0723/) inline dependencies, run with [uv](https://docs.astral.sh/uv/).
 
 ## Features
 
-- ✅ Downloads all images from Rawpixel boards/collections
-- ✅ Multi-page support - automatically paginate through large boards
-- ✅ CC0 license verification - only downloads public domain images
-- ✅ Metadata extraction - saves title, artist, description, tags, and more to CSV
-- ✅ Script to set up user authentication, required for downloading high resolution CC0 images
-- ✅ Progress tracking with terminal output.
+- Reads many URLs from `urls.txt` in one run
+- Handles search pages, boards/collections and single image links
+- Scrolls listing pages to the bottom (lazy-loaded / infinite scroll) and follows `rel="next"` pagination if present
+- Captures the full-resolution download link for each image without saving the file
+- One CSV row per image; re-runs append and skip image IDs already in the CSV
 
-## Requirements
+## Setup
 
-- Node.js (v14 or higher)
-- npm
-
-## Installation
-
-1. Clone or download this repository
-2. Install dependencies:
+1. Install the browser (one time):
 
 ```bash
-npm install
+uv run --with playwright playwright install chromium
 ```
 
-This will install:
-- `playwright` - Browser automation
-- `json2csv` - CSV export functionality
-- `dotenv` - Environment variable management
-
-3. Install Chromium browser (required by Playwright):
+2. Add URLs, one per line (`#` comments allowed):
 
 ```bash
-npm run install-browser
+cp urls.txt.example urls.txt
 ```
 
-4. Set up your Rawpixel session cookie (required for downloads):
-
-You'll need to create a free Rawpixel account to download images.
+3. Log in and save your session cookie to `.env` (needed for `download_url`):
 
 ```bash
-npm run setup
+uv run setup-cookie.py
 ```
-
-This will:
-- Open a browser window
-- Navigate to Rawpixel login page
-- Wait for you to log in
-- Automatically extract and save your session cookie to `.env`
-
-**Alternative manual setup:**
-If you prefer to set up the cookie manually, copy `.env.example` to `.env` and follow the instructions inside to paste your session cookie.
 
 ## Usage
 
-### Interactive mode (recommended)
-
-Simply run the script and follow the prompts:
-
 ```bash
-npm start
+uv run rp-downloader.py
 ```
 
-Or:
+| Flag | Description |
+|------|-------------|
+| `--urls FILE` | URL list file (default `urls.txt`) |
+| `--out FILE` | Output CSV (default `rawpixel.csv`) |
+| `--headless` | Run without a visible browser window |
 
-```bash
-node rp-downloader.js
-```
-
-The script will ask you for:
-1. **Board URL** - The Rawpixel board/collection URL to download from
-2. **Format** - Choose between high-resolution JPEG (recommended) or original TIFF
-
-### Command line mode
-
-You can also provide the board URL directly:
-
-```bash
-npm start -- 'https://www.rawpixel.com/search?page=1&path=BOARD_PATH&sort=curated'
-```
-
-Or:
-
-```bash
-node rp-downloader.js 'https://www.rawpixel.com/search?page=1&path=1522.3.sub_topic-2791&sort=curated'
-```
-
-### Finding board URLs
-
-1. Go to [Rawpixel.com](https://www.rawpixel.com)
-2. Browse to any public domain board or collection
-3. Copy the URL from your browser address bar
-4. Paste it when prompted (or use as command line argument)
-
-## Metadata CSV
-
-The `metadata.csv` file contains detailed information for each downloaded image:
+## CSV columns
 
 | Column | Description |
 |--------|-------------|
-| `filename` | Downloaded filename (includes image ID prefix) |
 | `imageId` | Rawpixel image ID |
 | `title` | Image title |
-| `artist` | Artist/creator name (if available) |
-| `license` | License type (CC0, Public Domain, etc.) |
-| `description` | Full image description |
-| `tags` | Keywords and tags |
-| `date` | Publication date (if available) |
-| `url` | Direct link to the image page |
-
-## Browser visibility
-
-By default, the browser window is visible so you can see the download progress. This is useful for:
-- Monitoring the process
-- Debugging issues
-- Verifying correct boards are being accessed
-
-To run in headless mode (no visible browser), edit `browser-downloader.js` line 124:
-
-```javascript
-// Change from:
-headless: false
-
-// To:
-headless: true
-```
+| `artist` | Artist/creator (if found) |
+| `license` | CC0, Public Domain or U.S. Government Works (blank if not detected) |
+| `description` | Description (max 500 chars) |
+| `tags` | Up to 10 keywords |
+| `date` | Date (if found) |
+| `preview_url` | Preview image from the page's `og:image` tag (not the full-resolution file) |
+| `download_url` | Full-resolution file URL, captured by clicking the page's Download button and cancelling (nothing is saved). Needs a login cookie |
+| `url` | Rawpixel image page |
+| `source_url` | The URL from `urls.txt` it came from |
 
 ## Troubleshooting
 
-If there are errors downloading it could be that:
-
-- You're hitting rate limits. Wait for a while and try later.
-- The boards contain non-public domain images. Check the image licences.
-- Rawpixel have changed the structure of their pages. Drat.
-
-## License
-
-This tool is for personal use only. Respect Rawpixel's terms of service and only download CC0/public domain images.
-
-## Contributing
-
-Found a bug or want to improve the script? Feel free to submit issues or pull requests.
+- Rate limited: wait and retry; rows already written are skipped on the next run.
+- Rawpixel may change its page structure, which can break the selectors.
 
 ## Disclaimer
 
-This is an unofficial tool and is not affiliated with or endorsed by Rawpixel. Use responsibly and in accordance with Rawpixel's terms of service.
+Unofficial tool, not affiliated with Rawpixel. Respect Rawpixel's terms of service.

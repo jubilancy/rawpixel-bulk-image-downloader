@@ -1,0 +1,9 @@
+# One Rawpixel URL per line. Blank lines and lines starting with # are ignored.
+# Copy this file to urls.txt, then run: uv run rp-downloader.py
+#
+# Search / topic listing
+# https://www.rawpixel.com/search?page=1&path=1522.3.sub_topic-2791&sort=curated
+# Board / collection
+# https://www.rawpixel.com/board/<id>/<name>
+# Single image
+# https://www.rawpixel.com/image/<id>/<name>
