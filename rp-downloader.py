@@ -35,6 +35,19 @@ CSV_FIELDS = ["imageId", "title", "artist", "license", "description",
 IMAGE_ID_RE = re.compile(r"/image/(\d+)")
 
 
+def parse_cookies(raw: str) -> list[dict]:
+    """Parse 'NAME=value' or a full 'a=1; b=2' cookie header into Playwright
+    cookies. Tolerates stray quotes/whitespace; skips malformed pieces."""
+    cookies = []
+    for part in raw.strip().strip("\"'").split(";"):
+        name, _, value = part.strip().partition("=")
+        name, value = name.strip(), value.strip().strip("\"'")
+        if name and value and re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name):
+            cookies.append({"name": name, "value": value,
+                            "domain": ".rawpixel.com", "path": "/"})
+    return cookies
+
+
 def read_urls(path: Path) -> list[str]:
     urls: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -278,13 +291,19 @@ def main() -> int:
 
         browser = pw.chromium.launch(headless=args.headless)
         context = browser.new_context(accept_downloads=True)
-        if not SESSION_COOKIE:
+        cookies = parse_cookies(SESSION_COOKIE)
+        if SESSION_COOKIE and not cookies:
+            print("❌ RAWPIXEL_SESSION_COOKIE in .env is not valid. Expected one line:\n"
+                  "   RAWPIXEL_SESSION_COOKIE=SSESSxxxx=cookie-value\n"
+                  "   (name, '=', value; no quotes or spaces). Fix .env and re-run.")
+            browser.close()
+            return 1
+        if not cookies:
             print("⚠️  No session cookie: full-resolution download URLs need a login "
-                  "(run: uv run setup-cookie.py)\n")
+                  "(see README)\n")
         else:
-            name, _, value = SESSION_COOKIE.partition("=")
-            context.add_cookies([{"name": name, "value": value,
-                                  "domain": ".rawpixel.com", "path": "/"}])
+            print(f"Using {len(cookies)} cookie(s): {', '.join(c['name'] for c in cookies)}\n")
+            context.add_cookies(cookies)
         page = context.new_page()
 
         # Resolve every URL into image link -> source URL
